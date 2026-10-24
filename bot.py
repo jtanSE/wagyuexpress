@@ -604,9 +604,9 @@ class FinalReached(Exception):
 
 
 class DecoyPolicy:
-    PERSONAS = (("highst_fortress", .12), ("highst_reclaim", .13),
+    PERSONAS = (("highst_fortress", .15), ("highst_reclaim", .13),
                 ("turf_raid", .25), ("cheap_blitz", .08),
-                ("price_spike", .07), ("rotation", .1), ("empty_premium", .1),
+                ("price_spike", .07), ("rotation", .07), ("empty_premium", .1),
                 ("inverse_crowd", .1), ("chaos", .05))
 
     def __init__(self, memory=None):
