@@ -711,7 +711,7 @@ class DecoyPolicy:
         if persona == "gameday_stadium":
             order = self._order(r, "stadium", "standard", self.rng.uniform(8.0, 9.5), .4, crowds)
         elif persona == "highst_fortress" and "highst" in spots:
-            order = self._order(r, "highst", "standard", self.rng.uniform(5.5, 7.0), .9, crowds)
+            order = self._order(r, "highst", "standard", self.rng.uniform(5.75, 7.25), .9, crowds)
         elif persona == "highst_reclaim" and "highst" in spots:
             holders = (last_spots.get("highst") or {}).get("trucks") or []
             rival_price = min((float(t.get("price") or 99) for t in holders
