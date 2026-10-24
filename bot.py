@@ -622,18 +622,74 @@ class DecoyPolicy:
         if state.get("mode") == "final":
             raise FinalReached()
 
+    RIOT_RADIUS = 600  # metres from the Stadium treated as riot-exposed
+
     def _order(self, r, spot, quality, price, share, crowds):
         price = round(max(r["price_min"], min(r["price_max"], price)), 2)
-        cap = int((r["budget"] + 1e-9) / float(r["costs"][quality]))
+        cap = min(int((r["budget"] + 1e-9) / float(r["costs"][quality])), self.capacity)
         meals = max(1, min(cap, int(float(crowds.get(spot, 100)) * share)))
         return {"spot": spot, "quality": quality, "price": price, "meals": meals}
+
+    @staticmethod
+    def _game_day(state):
+        """Forecast game-day event, or None."""
+        for event in (state.get("forecast") or {}).get("events") or []:
+            text = (str(event.get("key", "")) + " " + str(event.get("name", ""))).lower()
+            if event.get("opponent") or "game" in text or "champion" in text:
+                return event
+        return None
+
+    @staticmethod
+    def _office_policies(state):
+        office = (state.get("politics") or {}).get("office") or {}
+        return (office.get("holder") or {}).get("policies") or []
+
+    def _crowds(self, state, game_day):
+        """Expected customers with the office holder's crowd multipliers applied."""
+        crowds = {s: float(n) for s, n in
+                  ((state.get("forecast") or {}).get("expected_customers") or {}).items()}
+        for policy in self._office_policies(state):
+            multipliers = (policy.get("params") or {}).get("crowd")
+            if not isinstance(multipliers, dict):
+                continue
+            if policy.get("key") in ("crackdown", "tailgate") and not game_day:
+                continue
+            for spot, m in multipliers.items():
+                if spot in crowds:
+                    crowds[spot] *= float(m)
+        return crowds
+
+    def _riot_spots(self, state, spots, game_day):
+        """Spots near the Stadium on a Michigan or title game, unless riots are off."""
+        if not game_day or not (state.get("features") or {}).get("riots", True):
+            return set()
+        text = (str(game_day.get("opponent", "")) + " " + str(game_day.get("name", ""))
+                + " " + str(game_day.get("key", ""))).lower()
+        if "michigan" not in text and "champion" not in text and "title" not in text:
+            return set()
+        if any(p.get("key") == "crackdown" for p in self._office_policies(state)):
+            return set()
+        info = state.get("spot_info") or {}
+        center = info.get(game_day.get("spot") or "stadium") or info.get("stadium")
+        if not center:
+            return {s for s in spots if s in ("stadium", "thompson", "oval")}
+        return {s for s in spots if s in info and math.hypot(
+            float(info[s]["x"]) - float(center["x"]),
+            float(info[s]["z"]) - float(center["z"])) <= self.RIOT_RADIUS}
 
     def decide(self, state):
         if state.get("mode") == "final":
             raise FinalReached()
         r = rules_for(state)
-        spots = r["spots"]
-        crowds = (state.get("forecast") or {}).get("expected_customers") or {}
+        staff = (state.get("rules") or {}).get("staff") or {}
+        employees = ((state.get("last_day") or {}).get("you") or {}).get("employees") \
+            or staff.get("default_staff", 4)
+        self.capacity = int(employees) * int(staff.get("meals_per_employee", 50)) \
+            if (state.get("features") or {}).get("staff") else 10 ** 6
+        game_day = self._game_day(state)
+        crowds = self._crowds(state, game_day)
+        riot = self._riot_spots(state, r["spots"], game_day)
+        spots = [s for s in r["spots"] if s not in riot] or r["spots"]
         me = (state.get("you") or {}).get("id")
         rivals = [t for t in state.get("trucks") or [] if t.get("id") != me]
         strongholds = [s for t in rivals for s, rep in (t.get("reputation") or {}).items()
@@ -656,8 +712,9 @@ class DecoyPolicy:
             # Cheap, heavy stock: teach rivals High Street is a price war.
             order = self._order(r, "highst", "standard", self.rng.uniform(5.5, 7.0), .9, crowds)
         elif persona == "turf_raid":
+            # Days 30-31 raids sold 34-67 meals; lighter stock keeps the signal cheaper.
             order = self._order(r, self.rng.choice(strongholds), "standard",
-                                self.rng.uniform(5.0, 6.5), .8, crowds)
+                                self.rng.uniform(5.0, 6.5), .5, crowds)
         elif persona == "mirror_leader":
             # Shadow the richest rival's spot from yesterday, a hair cheaper.
             spot, truck = leader_play
@@ -680,7 +737,11 @@ class DecoyPolicy:
             order = self._order(r, self.rng.choice(spots), quality,
                                 float(r["values"][quality]) * self.rng.uniform(.4, 1.1),
                                 self.rng.uniform(.1, 1), crowds)
-        self.explanation = {"decoy_persona": persona, "order": order}
+        last_spot = ((state.get("last_day") or {}).get("you") or {}).get("spot")
+        move_cost = ((state.get("rules") or {}).get("move_costs") or {}).get(last_spot, {}).get(order["spot"], 0)
+        self.explanation = {"decoy_persona": persona, "order": order, "game_day": bool(game_day),
+                            "riot_avoided": sorted(riot), "capacity": self.capacity,
+                            "move_cost": move_cost}
         self.memory["history"].append([state.get("order_for_day"), persona, order])
         return order
 
