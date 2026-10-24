@@ -737,11 +737,11 @@ class DecoyPolicy:
             order = self._order(r, spot, quality, price, .6, crowds)
         elif persona == "price_spike" and "highst" in spots:
             # Thin premium stock at a high price: looks like we gave up on volume.
-            order = self._order(r, "highst", "premium", self.rng.uniform(13.5, 15.5), .2, crowds)
+            order = self._order(r, "highst", "premium", self.rng.uniform(12.75, 14.75), .2, crowds)
         elif persona == "rotation":
             # A clean day-indexed cycle that pattern detectors can latch onto.
             day = int(state.get("order_for_day") or 0)
-            order = self._order(r, spots[day % len(spots)], "standard", 7.77, .5, crowds)
+            order = self._order(r, spots[day % len(spots)], "standard", 7.49, .5, crowds)
         elif persona == "cheap_blitz":
             # Rock-bottom cheap food at the second-busiest spot: looks like a
             # price war is starting, so rival price models chase us downward.
