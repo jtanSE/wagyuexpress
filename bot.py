@@ -610,8 +610,9 @@ class DecoyPolicy:
     reports mode final (observe() runs before decide(), outside play()'s
     fallback guard, so no fallback order can slip through).
     """
-    PERSONAS = (("highst_fortress", .25), ("turf_raid", .2), ("mirror_leader", .15),
-                ("price_spike", .15), ("rotation", .1), ("empty_feint", .1), ("chaos", .05))
+    PERSONAS = (("highst_fortress", .25), ("turf_raid", .17), ("mirror_leader", .08),
+                ("price_spike", .15), ("rotation", .1), ("empty_feint", .1),
+                ("inverse_crowd", .1), ("chaos", .05))
 
     def __init__(self, memory=None):
         self.memory = {"decoy": True, "history": list((memory or {}).get("history", []))}
@@ -728,6 +729,11 @@ class DecoyPolicy:
             # A clean day-indexed cycle that pattern detectors can latch onto.
             day = int(state.get("order_for_day") or 0)
             order = self._order(r, spots[day % len(spots)], "standard", 7.77, .5, crowds)
+        elif persona == "inverse_crowd":
+            # Cheap food at the quietest spot: rivals that infer demand from our
+            # sales see a busy truck where the forecast says nobody goes.
+            spot = min(spots, key=lambda s: float(crowds.get(s, 0)))
+            order = self._order(r, spot, "cheap", self.rng.uniform(4.0, 5.5), .9, crowds)
         elif persona == "empty_feint":
             spot = max(empty, key=lambda s: float(crowds.get(s, 0)))
             order = self._order(r, spot, "premium", self.rng.uniform(13, 15.5), .35, crowds)
