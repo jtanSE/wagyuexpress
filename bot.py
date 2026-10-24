@@ -736,7 +736,7 @@ class DecoyPolicy:
             order = self._order(r, spot, "cheap", self.rng.uniform(3.5, 4.5), .6, crowds)
         elif persona == "inverse_crowd":
             spot = min(spots, key=lambda s: float(crowds.get(s, 0)))
-            order = self._order(r, spot, "cheap", self.rng.uniform(4.0, 5.5), .9, crowds)
+            order = self._order(r, spot, "cheap", self.rng.uniform(4.0, 5.5), .55, crowds)
         elif persona == "empty_premium":
             spot = max(empty, key=lambda s: float(crowds.get(s, 0)))
             order = self._order(r, spot, "premium", self.rng.uniform(13, 15.5), .35, crowds)
