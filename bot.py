@@ -604,15 +604,9 @@ class FinalReached(Exception):
 
 
 class DecoyPolicy:
-    """Practice-only play meant to mislead rival bots that model opponents.
-
-    Picks one experimental persona per night. Refuses to play once the game
-    reports mode final (observe() runs before decide(), outside play()'s
-    fallback guard, so no fallback order can slip through).
-    """
     PERSONAS = (("highst_fortress", .12), ("highst_reclaim", .13),
                 ("turf_raid", .17), ("cheap_blitz", .08),
-                ("price_spike", .15), ("rotation", .1), ("empty_feint", .1),
+                ("price_spike", .15), ("rotation", .1), ("empty_premium", .1),
                 ("inverse_crowd", .1), ("chaos", .05))
 
     def __init__(self, memory=None):
@@ -624,7 +618,7 @@ class DecoyPolicy:
         if state.get("mode") == "final":
             raise FinalReached()
 
-    RIOT_RADIUS = 600  # metres from the Stadium treated as riot-exposed
+    RIOT_RADIUS = 600
 
     def _order(self, r, spot, quality, price, share, crowds):
         price = round(max(r["price_min"], min(r["price_max"], price)), 2)
@@ -634,7 +628,6 @@ class DecoyPolicy:
 
     @staticmethod
     def _game_day(state):
-        """Forecast game-day event, or None."""
         for event in (state.get("forecast") or {}).get("events") or []:
             text = (str(event.get("key", "")) + " " + str(event.get("name", ""))).lower()
             if event.get("opponent") or "game" in text or "champion" in text:
@@ -647,7 +640,6 @@ class DecoyPolicy:
         return (office.get("holder") or {}).get("policies") or []
 
     def _crowds(self, state, game_day):
-        """Expected customers with the office holder's crowd multipliers applied."""
         crowds = {s: float(n) for s, n in
                   ((state.get("forecast") or {}).get("expected_customers") or {}).items()}
         for policy in self._office_policies(state):
@@ -666,7 +658,6 @@ class DecoyPolicy:
         return crowds
 
     def _riot_spots(self, state, spots, game_day):
-        """Spots near the Stadium on a Michigan or title game, unless riots are off."""
         if not game_day or not (state.get("features") or {}).get("riots", True):
             return set()
         text = (str(game_day.get("opponent", "")) + " " + str(game_day.get("name", ""))
@@ -713,48 +704,40 @@ class DecoyPolicy:
             persona = "highst_fortress"
         if persona == "mirror_leader" and not (leader_play and leader_play[0] in spots):
             persona = "rotation"
-        if persona == "empty_feint" and not empty:
+        if persona == "empty_premium" and not empty:
             persona = "chaos"
-        if persona == "highst_fortress" and "highst" in spots:
-            # Cheap, heavy stock: teach rivals High Street is a price war.
+        if game_day and "stadium" in spots and self.rng.random() < .3:
+            persona = "gameday_stadium"
+        if persona == "gameday_stadium":
+            order = self._order(r, "stadium", "standard", self.rng.uniform(8.0, 9.5), .4, crowds)
+        elif persona == "highst_fortress" and "highst" in spots:
             order = self._order(r, "highst", "standard", self.rng.uniform(5.5, 7.0), .9, crowds)
         elif persona == "highst_reclaim" and "highst" in spots:
-            # Undercut whoever held High Street yesterday with full premium stock,
-            # signalling we will defend it so squatters move off before the final.
             holders = (last_spots.get("highst") or {}).get("trucks") or []
             rival_price = min((float(t.get("price") or 99) for t in holders
                                if t.get("id") != me), default=10.5)
             order = self._order(r, "highst", "premium", min(rival_price, 10.75) - .25, .7, crowds)
         elif persona == "turf_raid":
-            # Days 30-31 raids sold 34-67 meals; lighter stock keeps the signal cheaper.
             order = self._order(r, self.rng.choice(strongholds), "standard",
                                 self.rng.uniform(5.0, 6.5), .5, crowds)
         elif persona == "mirror_leader":
-            # Shadow the richest rival's spot from yesterday, a hair cheaper.
             spot, truck = leader_play
             quality = truck.get("quality") if truck.get("quality") in QUALITIES else "standard"
             price = float(truck.get("price") or r["values"][quality] * .7) - .25
             order = self._order(r, spot, quality, price, .6, crowds)
         elif persona == "price_spike" and "highst" in spots:
-            # Thin premium stock at a high price: looks like we gave up on volume.
             order = self._order(r, "highst", "premium", self.rng.uniform(12.75, 14.75), .2, crowds)
         elif persona == "rotation":
-            # A clean day-indexed cycle that pattern detectors can latch onto.
             day = int(state.get("order_for_day") or 0)
             order = self._order(r, spots[day % len(spots)], "standard", 7.49, .5, crowds)
         elif persona == "cheap_blitz":
-            # Rock-bottom cheap food at the second-busiest spot: looks like a
-            # price war is starting, so rival price models chase us downward.
-            # Replaces mirror_leader, which lost $184 and $254 copying IBE.
             ranked = sorted(spots, key=lambda s: -float(crowds.get(s, 0)))
             spot = ranked[1] if len(ranked) > 1 else ranked[0]
             order = self._order(r, spot, "cheap", self.rng.uniform(3.5, 4.5), .6, crowds)
         elif persona == "inverse_crowd":
-            # Cheap food at the quietest spot: rivals that infer demand from our
-            # sales see a busy truck where the forecast says nobody goes.
             spot = min(spots, key=lambda s: float(crowds.get(s, 0)))
             order = self._order(r, spot, "cheap", self.rng.uniform(4.0, 5.5), .9, crowds)
-        elif persona == "empty_feint":
+        elif persona == "empty_premium":
             spot = max(empty, key=lambda s: float(crowds.get(s, 0)))
             order = self._order(r, spot, "premium", self.rng.uniform(13, 15.5), .35, crowds)
         else:
@@ -1055,7 +1038,7 @@ def main(argv=None):
     ap.add_argument("--url", default="https://nightshift.joinbuilders.org", help="game server origin")
     ap.add_argument("--price-discount", type=float, default=0.0,
                     help="subtract this amount once from the selected price; recalculate stock")
-    ap.add_argument("--decoy", action="store_true", help="practice-only misleading play; stops in final mode")
+    ap.add_argument("--decoy", action="store_true", help="alternate order selection; stops in final mode")
     args = ap.parse_args(argv)
     if args.decoy and args.memory == Path(".nightshift/memory.json"):
         ap.error("--decoy needs its own --memory file")
