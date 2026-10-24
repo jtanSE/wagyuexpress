@@ -611,7 +611,7 @@ class DecoyPolicy:
     fallback guard, so no fallback order can slip through).
     """
     PERSONAS = (("highst_fortress", .12), ("highst_reclaim", .13),
-                ("turf_raid", .17), ("mirror_leader", .08),
+                ("turf_raid", .17), ("cheap_blitz", .08),
                 ("price_spike", .15), ("rotation", .1), ("empty_feint", .1),
                 ("inverse_crowd", .1), ("chaos", .05))
 
@@ -742,6 +742,13 @@ class DecoyPolicy:
             # A clean day-indexed cycle that pattern detectors can latch onto.
             day = int(state.get("order_for_day") or 0)
             order = self._order(r, spots[day % len(spots)], "standard", 7.77, .5, crowds)
+        elif persona == "cheap_blitz":
+            # Rock-bottom cheap food at the second-busiest spot: looks like a
+            # price war is starting, so rival price models chase us downward.
+            # Replaces mirror_leader, which lost $184 and $254 copying IBE.
+            ranked = sorted(spots, key=lambda s: -float(crowds.get(s, 0)))
+            spot = ranked[1] if len(ranked) > 1 else ranked[0]
+            order = self._order(r, spot, "cheap", self.rng.uniform(3.5, 4.5), .6, crowds)
         elif persona == "inverse_crowd":
             # Cheap food at the quietest spot: rivals that infer demand from our
             # sales see a busy truck where the forecast says nobody goes.
