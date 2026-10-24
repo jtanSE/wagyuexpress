@@ -1,0 +1,7 @@
+# Only the published runtime and basic operating instructions belong here.
+# Team memory, credentials, research and experiment files stay private.
+*
+!.gitignore
+!README.md
+!bot.py
+!run_bot.py
