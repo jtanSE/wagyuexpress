@@ -599,6 +599,92 @@ class Policy:
         return order
 
 
+class FinalReached(Exception):
+    pass
+
+
+class DecoyPolicy:
+    """Practice-only play meant to mislead rival bots that model opponents.
+
+    Picks one experimental persona per night. Refuses to play once the game
+    reports mode final (observe() runs before decide(), outside play()'s
+    fallback guard, so no fallback order can slip through).
+    """
+    PERSONAS = (("highst_fortress", .25), ("turf_raid", .2), ("mirror_leader", .15),
+                ("price_spike", .15), ("rotation", .1), ("empty_feint", .1), ("chaos", .05))
+
+    def __init__(self, memory=None):
+        self.memory = {"decoy": True, "history": list((memory or {}).get("history", []))}
+        self.explanation = {}
+        self.rng = random.Random()
+
+    def observe(self, state):
+        if state.get("mode") == "final":
+            raise FinalReached()
+
+    def _order(self, r, spot, quality, price, share, crowds):
+        price = round(max(r["price_min"], min(r["price_max"], price)), 2)
+        cap = int((r["budget"] + 1e-9) / float(r["costs"][quality]))
+        meals = max(1, min(cap, int(float(crowds.get(spot, 100)) * share)))
+        return {"spot": spot, "quality": quality, "price": price, "meals": meals}
+
+    def decide(self, state):
+        if state.get("mode") == "final":
+            raise FinalReached()
+        r = rules_for(state)
+        spots = r["spots"]
+        crowds = (state.get("forecast") or {}).get("expected_customers") or {}
+        me = (state.get("you") or {}).get("id")
+        rivals = [t for t in state.get("trucks") or [] if t.get("id") != me]
+        strongholds = [s for t in rivals for s, rep in (t.get("reputation") or {}).items()
+                       if rep >= 90 and s in spots and s != "highst"]
+        last_spots = (state.get("last_day") or {}).get("spots") or {}
+        visited = {s for s, v in last_spots.items() if isinstance(v, dict) and v.get("trucks")}
+        empty = [s for s in spots if s not in visited and s != "highst"]
+        leader = max(rivals, key=lambda t: float(t.get("cash", 0)), default={}).get("id")
+        leader_play = next(((s, t) for s, v in last_spots.items() if isinstance(v, dict)
+                            for t in v.get("trucks") or [] if t.get("id") == leader), None)
+        names, weights = zip(*self.PERSONAS)
+        persona = self.rng.choices(names, weights)[0]
+        if persona == "turf_raid" and not strongholds:
+            persona = "highst_fortress"
+        if persona == "mirror_leader" and not (leader_play and leader_play[0] in spots):
+            persona = "rotation"
+        if persona == "empty_feint" and not empty:
+            persona = "chaos"
+        if persona == "highst_fortress" and "highst" in spots:
+            # Cheap, heavy stock: teach rivals High Street is a price war.
+            order = self._order(r, "highst", "standard", self.rng.uniform(5.5, 7.0), .9, crowds)
+        elif persona == "turf_raid":
+            order = self._order(r, self.rng.choice(strongholds), "standard",
+                                self.rng.uniform(5.0, 6.5), .8, crowds)
+        elif persona == "mirror_leader":
+            # Shadow the richest rival's spot from yesterday, a hair cheaper.
+            spot, truck = leader_play
+            quality = truck.get("quality") if truck.get("quality") in QUALITIES else "standard"
+            price = float(truck.get("price") or r["values"][quality] * .7) - .25
+            order = self._order(r, spot, quality, price, .6, crowds)
+        elif persona == "price_spike" and "highst" in spots:
+            # Thin premium stock at a high price: looks like we gave up on volume.
+            order = self._order(r, "highst", "premium", self.rng.uniform(13.5, 15.5), .2, crowds)
+        elif persona == "rotation":
+            # A clean day-indexed cycle that pattern detectors can latch onto.
+            day = int(state.get("order_for_day") or 0)
+            order = self._order(r, spots[day % len(spots)], "standard", 7.77, .5, crowds)
+        elif persona == "empty_feint":
+            spot = max(empty, key=lambda s: float(crowds.get(s, 0)))
+            order = self._order(r, spot, "premium", self.rng.uniform(13, 15.5), .35, crowds)
+        else:
+            persona = "chaos"
+            quality = self.rng.choice(QUALITIES)
+            order = self._order(r, self.rng.choice(spots), quality,
+                                float(r["values"][quality]) * self.rng.uniform(.4, 1.1),
+                                self.rng.uniform(.1, 1), crowds)
+        self.explanation = {"decoy_persona": persona, "order": order}
+        self.memory["history"].append([state.get("order_for_day"), persona, order])
+        return order
+
+
 _default_policy = None
 
 
@@ -882,7 +968,10 @@ def main(argv=None):
     ap.add_argument("--url", default="https://nightshift.joinbuilders.org", help="game server origin")
     ap.add_argument("--price-discount", type=float, default=0.0,
                     help="subtract this amount once from the selected price; recalculate stock")
+    ap.add_argument("--decoy", action="store_true", help="practice-only misleading play; stops in final mode")
     args = ap.parse_args(argv)
+    if args.decoy and args.memory == Path(".nightshift/memory.json"):
+        ap.error("--decoy needs its own --memory file")
     if not math.isfinite(args.price_discount) or args.price_discount < 0:
         ap.error("--price-discount must be finite and nonnegative")
     discount_options = {"price_discount": args.price_discount} if args.price_discount else {}
@@ -905,8 +994,11 @@ def main(argv=None):
     if not key:
         ap.error("NIGHTSHIFT_KEY is missing; nothing was sent")
     transport = Transport(key, args.url)
-    policy = Policy(memory=load_memory(args.memory),
-                    risk=inventory_risk, **discount_options)
+    if args.decoy:
+        policy = DecoyPolicy(memory=load_memory(args.memory))
+    else:
+        policy = Policy(memory=load_memory(args.memory),
+                        risk=inventory_risk, **discount_options)
     base = "/api/v1"
     if args.practice:
         body = {"days": args.days, "rivals": args.rivals}
@@ -920,6 +1012,8 @@ def main(argv=None):
         policy.context = None
     try:
         play(transport, policy, base, args.watch, args.memory, args.log)
+    except FinalReached:
+        print(json.dumps({"event": "decoy_stopped", "reason": "final mode reached"}))
     finally:
         transport.close()
     return 0
