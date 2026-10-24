@@ -610,7 +610,8 @@ class DecoyPolicy:
     reports mode final (observe() runs before decide(), outside play()'s
     fallback guard, so no fallback order can slip through).
     """
-    PERSONAS = (("highst_fortress", .25), ("turf_raid", .17), ("mirror_leader", .08),
+    PERSONAS = (("highst_fortress", .12), ("highst_reclaim", .13),
+                ("turf_raid", .17), ("mirror_leader", .08),
                 ("price_spike", .15), ("rotation", .1), ("empty_feint", .1),
                 ("inverse_crowd", .1), ("chaos", .05))
 
@@ -650,10 +651,14 @@ class DecoyPolicy:
         crowds = {s: float(n) for s, n in
                   ((state.get("forecast") or {}).get("expected_customers") or {}).items()}
         for policy in self._office_policies(state):
-            multipliers = (policy.get("params") or {}).get("crowd")
-            if not isinstance(multipliers, dict):
+            params = policy.get("params") or {}
+            multipliers = params.get("crowd")
+            if game_day and isinstance(params.get("game_crowd"), dict):
+                game = params["game_crowd"]
+                multipliers = {s: game.get(s, game.get("other", 1.0)) for s in crowds}
+            elif policy.get("key") in ("crackdown", "tailgate") and not game_day:
                 continue
-            if policy.get("key") in ("crackdown", "tailgate") and not game_day:
+            if not isinstance(multipliers, dict):
                 continue
             for spot, m in multipliers.items():
                 if spot in crowds:
@@ -668,7 +673,8 @@ class DecoyPolicy:
                 + " " + str(game_day.get("key", ""))).lower()
         if "michigan" not in text and "champion" not in text and "title" not in text:
             return set()
-        if any(p.get("key") == "crackdown" for p in self._office_policies(state)):
+        if any(p.get("key") == "crackdown" or (p.get("params") or {}).get("riot") == 0
+               for p in self._office_policies(state)):
             return set()
         info = state.get("spot_info") or {}
         center = info.get(game_day.get("spot") or "stadium") or info.get("stadium")
@@ -712,6 +718,13 @@ class DecoyPolicy:
         if persona == "highst_fortress" and "highst" in spots:
             # Cheap, heavy stock: teach rivals High Street is a price war.
             order = self._order(r, "highst", "standard", self.rng.uniform(5.5, 7.0), .9, crowds)
+        elif persona == "highst_reclaim" and "highst" in spots:
+            # Undercut whoever held High Street yesterday with full premium stock,
+            # signalling we will defend it so squatters move off before the final.
+            holders = (last_spots.get("highst") or {}).get("trucks") or []
+            rival_price = min((float(t.get("price") or 99) for t in holders
+                               if t.get("id") != me), default=10.5)
+            order = self._order(r, "highst", "premium", min(rival_price, 10.75) - .25, .7, crowds)
         elif persona == "turf_raid":
             # Days 30-31 raids sold 34-67 meals; lighter stock keeps the signal cheaper.
             order = self._order(r, self.rng.choice(strongholds), "standard",
